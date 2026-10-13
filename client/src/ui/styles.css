@@ -6452,6 +6452,21 @@ html.is-replay #world {
   flex: none;
 }
 
+.ui-snd__url {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  font: inherit;
+  color: inherit;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+}
+
+.ui-snd__url:disabled {
+  opacity: 0.5;
+}
+
 .ui-snd__range {
   flex: 1;
   min-width: 0;

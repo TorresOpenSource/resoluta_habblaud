@@ -3,11 +3,11 @@
 import type { SoundCueKind } from '../world/api';
 
 /** Categorias que o usuário liga/desliga nas configurações. */
-export type SoundCategory = 'alerts' | 'keys' | 'elevator' | 'social';
+export type SoundCategory = 'alerts' | 'keys' | 'elevator' | 'social' | 'music';
 /** Sons: o sino de "precisa de você", o estalo de tarefa concluída e os do ambiente. */
 export type SoundKind = 'chime' | 'pop' | SoundCueKind;
 
-export const SOUND_CATEGORIES: readonly SoundCategory[] = ['alerts', 'keys', 'elevator', 'social'];
+export const SOUND_CATEGORIES: readonly SoundCategory[] = ['alerts', 'keys', 'elevator', 'social', 'music'];
 
 export const CATEGORY_OF: Readonly<Record<SoundKind, SoundCategory>> = {
   chime: 'alerts',
@@ -51,9 +51,13 @@ export interface SoundSettings {
   keys: boolean;
   elevator: boolean;
   social: boolean;
+  /** Música de fundo enquanto há trabalho em execução. */
+  music: boolean;
+  /** Link do YouTube para a música (vazio: usa a música sintetizada). */
+  musicUrl: string;
 }
 
-export const DEFAULT_SOUND_SETTINGS: SoundSettings = { volume: 0.6, alerts: true, keys: true, elevator: true, social: true };
+export const DEFAULT_SOUND_SETTINGS: SoundSettings = { volume: 0.6, alerts: true, keys: true, elevator: true, social: true, music: false, musicUrl: '' };
 
 /** Valida campo a campo (preferência corrompida cai no padrão). */
 export function sanitizeSoundSettings(raw: unknown): SoundSettings {
@@ -61,7 +65,7 @@ export function sanitizeSoundSettings(raw: unknown): SoundSettings {
   const d = DEFAULT_SOUND_SETTINGS;
   const bool = (v: unknown, f: boolean) => (typeof v === 'boolean' ? v : f);
   const vol = typeof o.volume === 'number' && Number.isFinite(o.volume) ? Math.min(1, Math.max(0, o.volume)) : d.volume;
-  return { volume: vol, alerts: bool(o.alerts, d.alerts), keys: bool(o.keys, d.keys), elevator: bool(o.elevator, d.elevator), social: bool(o.social, d.social) };
+  return { volume: vol, alerts: bool(o.alerts, d.alerts), keys: bool(o.keys, d.keys), elevator: bool(o.elevator, d.elevator), social: bool(o.social, d.social), music: bool(o.music, d.music), musicUrl: typeof o.musicUrl === 'string' ? o.musicUrl.trim().slice(0, 300) : d.musicUrl };
 }
 
 /** Curva do volume mestre: o controle deslizante fica perceptualmente linear. */
