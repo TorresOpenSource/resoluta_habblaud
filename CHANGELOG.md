@@ -10,6 +10,29 @@ do meio (0.**3**.0).
 
 ## [Não lançado]
 
+### Adicionado
+
+- **Cline e Antigravity no escritório.** As sessões do Cline e as conversas do Antigravity aparecem como personagens
+  (trabalhando ou ocioso) na sala do projeto, e a música de fundo toca quando elas trabalham. Só presença e status, lendo
+  os bancos SQLite locais deles em somente leitura. `HABBLAUD_CLINE=0` e `HABBLAUD_ANTIGRAVITY=0` desligam.
+- **Plugin de mensagens instalado sozinho.** Onde o mod do Habblaud já está e o plugin `habblaud-mensagens` não, o
+  `npm run docker:up` e um novo `npm run mod:ensure` (que roda sozinho antes de `npm start` e `npm run dev`) instalam o
+  plugin, sem você rodar o `mod:install`. Nunca instala o mod do zero e nunca derruba o start.
+  `HABBLAUD_AUTO_MENSAGENS=0` desliga.
+- **Aprovar pelo escritório os pedidos do Cline.** O pedido de aprovação do Cline vira o cartão "Pede permissão" (e o
+  agente fica esperando você); a primeira resposta, daqui ou do app do Cline, vale. A conexão com o hub só fica aberta
+  enquanto há uma página local do Habblaud aberta.
+- **Terminal do Cline.** "Abrir terminal" mostra a conversa da sessão do Cline (prompts, respostas, ferramentas e
+  resultados), lida do arquivo de mensagens dele, que é regravado a cada mensagem. O Antigravity continua sem terminal.
+- **Mandar mensagens ao Cline.** A caixa "Mandar mensagem" funciona para o Cline, pelo hub local dele: o Habblaud lê o
+  endereço e o token do arquivo do hub só no momento de enviar, só fala com um hub em loopback e nunca registra o token.
+  Só fora do Docker. O Antigravity continua sem mensagens.
+- **Música de fundo enquanto há trabalho em execução.** Nova categoria **Música** em Configurações › Sons (desligada por
+  padrão): um laço calmo, sintetizado no navegador, toca enquanto algum agente estiver processando um pedido ou esperando
+  um comando terminar, e some com suavidade pouco depois do último trabalho. Pausa com a aba oculta.
+- **Música do YouTube.** Em Configurações › Sons, cole o link de um vídeo ou playlist do YouTube e ele toca em loop (player
+  embutido e escondido) no lugar da música sintetizada, enquanto houver trabalho em execução.
+
 ## [0.8.0] - 2026-10-09
 
 Para atualizar: `git pull` e `npm run docker:up`. Renomear salas e editar o personagem funcionam só pelo próprio
