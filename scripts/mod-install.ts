@@ -76,13 +76,15 @@ const SCOPE = 'user';
 /** Tempo máximo de cada chamada ao CLI (o add/update de um diretório local leva poucos segundos). */
 const CLI_TIMEOUT_MS = 120_000;
 
-const USAGE = `Uso: npm run mod:<install|uninstall|status> [-- opções]
+const USAGE = `Uso: npm run mod:<install|uninstall|status|ensure> [-- opções]
 
   install     instala o mod do Habblaud no Claude Code de cada conta (marketplace desta pasta + plugins)
               e tira o que ele substitui: o tap de statusline e o hook de permissão antigos e o mod do
               nome antigo (codetown)
   uninstall   tira os plugins e o marketplace do Habblaud de cada conta (e os do nome antigo, se sobraram)
   status      mostra, por conta, o marketplace, os plugins (e versões) e o que sobrou do jeito antigo
+  ensure      (roda sozinho antes de npm start e npm run dev) atualiza o mod onde ele já está e instala o plugin de
+              mensagens onde só o mod está; nunca instala o mod do zero e nunca falha. HABBLAUD_AUTO_MENSAGENS=0 desliga
 
 Opções:
   --sem-permissoes   não instala o plugin de responder permissões pelo escritório (e mantém o hook antigo)
@@ -503,7 +505,7 @@ export type UpdatePlan =
 /** A dica do plugin de mensagens, quando a conta tem o mod e não ele. */
 export const MESSAGES_HINT = `rode npm run mod:install para mandar mensagens pelo escritório (plugin ${shortName(MESSAGES_PLUGIN)})`;
 
-export function planUpdate(state: AccountState, o: { root: string; version: string; sameDir?: (a: string, b: string) => boolean }): UpdatePlan {
+export function planUpdate(state: AccountState, o: { root: string; version: string; sameDir?: (a: string, b: string) => boolean; autoMessages?: boolean }): UpdatePlan {
   const same = o.sameDir ?? sameDir;
   // Nome antigo: a troca (tirar o codetown, instalar o habblaud) é do mod:install; aqui só o aviso. Um aviso conta
   // como "instalado", então a dica de instalar do zero não aparece para quem já usava o mod.
@@ -511,11 +513,15 @@ export function planUpdate(state: AccountState, o: { root: string; version: stri
   if (legacy) return { action: 'warn', message: `ainda com o nome antigo (${legacy}); o docker:up não troca sozinho: rode npm run mod:install` };
   const installed = PLUGINS.map((id) => userInstall(state, id)).filter((p): p is PluginInfo => !!p);
   if (!installed.length) return { action: 'none', installed: false };
-  const hint = userInstall(state, MOD_PLUGIN) && !userInstall(state, MESSAGES_PLUGIN) ? { hint: MESSAGES_HINT } : {};
+  const missingMessages = !!userInstall(state, MOD_PLUGIN) && !userInstall(state, MESSAGES_PLUGIN);
+  const hint = missingMessages ? { hint: MESSAGES_HINT } : {};
   const stale = installed.filter((p) => p.version !== o.version);
-  if (!stale.length) return { action: 'none', installed: true, ...hint };
-  // Marketplace de outra pasta (outro clone, pasta movida): atualizar dali não traria esta versão.
+  // Quem tem o mod e não o plugin de mensagens (que veio depois) ganha o plugin sozinho (autoMessages; o mod:install
+  // sempre o instala, então quem optou por --sem-mensagens desliga isto com HABBLAUD_AUTO_MENSAGENS=0).
   const m = state.marketplace;
+  const installable = missingMessages && !!o.autoMessages && !!m?.path && same(m.path, o.root);
+  if (!stale.length && !installable) return { action: 'none', installed: true, ...hint };
+  // Marketplace de outra pasta (outro clone, pasta movida): atualizar dali não traria esta versão.
   if (!m) return { action: 'warn', message: `o mod está instalado, mas o marketplace ${MARKETPLACE} sumiu; rode npm run mod:install` };
   if (!m.path || !same(m.path, o.root)) {
     return { action: 'warn', message: `o mod vem de outra pasta (${m.path ?? m.source ?? '?'}), então não foi atualizado; para usar esta: npm run mod:install` };
@@ -524,9 +530,10 @@ export function planUpdate(state: AccountState, o: { root: string; version: stri
     action: 'update',
     steps: [
       { args: ['plugin', 'marketplace', 'update', MARKETPLACE], message: `marketplace ${MARKETPLACE}: catálogo relido` },
+      ...(installable ? [{ args: ['plugin', 'install', MESSAGES_PLUGIN, '--scope', SCOPE], message: `${shortName(MESSAGES_PLUGIN)}: instalado`, plugin: MESSAGES_PLUGIN }] : []),
       ...stale.map((p) => ({ args: ['plugin', 'update', p.id, '--scope', SCOPE], message: `${shortName(p.id)}: ${p.version ?? '?'} → ${o.version}`, plugin: p.id })),
     ],
-    ...hint,
+    ...(installable ? {} : hint),
   };
 }
 
@@ -592,7 +599,7 @@ export function describeStatus(state: AccountState, settings: Settings, o: { roo
 // ---------------------------------------------------------------------------------------------
 
 export interface RunOptions {
-  command: 'install' | 'uninstall' | 'status';
+  command: 'install' | 'uninstall' | 'status' | 'ensure';
   dryRun: boolean;
   /** false com --sem-permissoes. */
   permissions: boolean;
@@ -661,10 +668,10 @@ export function parseArgs(argv: string[]): RunOptions | 'help' {
     } else if (a === '--claude') {
       claudeCmd = argv[++i];
       if (!claudeCmd) throw new FatalError('--claude precisa de um comando ou caminho.');
-    } else if ((a === 'install' || a === 'uninstall' || a === 'status') && !command) command = a;
+    } else if ((a === 'install' || a === 'uninstall' || a === 'status' || a === 'ensure') && !command) command = a;
     else throw new FatalError(`opção desconhecida: ${a}\n\n${USAGE}`);
   }
-  if (!command) throw new FatalError(`diga o que fazer: install, uninstall ou status.\n\n${USAGE}`);
+  if (!command) throw new FatalError(`diga o que fazer: install, uninstall, status ou ensure.\n\n${USAGE}`);
   return { command, dryRun, permissions, messages, accounts, claudeCmd };
 }
 
@@ -719,6 +726,16 @@ function lastCapture(dir: string, env: NodeJS.ProcessEnv, home: string, now: Dat
 export async function run(opts: RunOptions, ctx: RunContext): Promise<number> {
   const { env, home, out } = ctx;
   const dirs = accountDirs(opts, env, home);
+  if (opts.command === 'ensure') {
+    // Antes de subir o servidor: quieto, sem contas ou sem `claude` não diz nada, e nunca derruba o start.
+    if (!dirs.length) return 0;
+    const res = updateInstalledMods(
+      dirs.map((dir) => ({ dir, label: `${basename(dir)}` })),
+      { env, home, root: ctx.root, version: ctx.version, claude: ctx.claude },
+    );
+    for (const l of res.lines) if (!res.unavailable) out(`[mod] ${l.level === 'warn' ? '! ' : ''}${l.text}`);
+    return 0;
+  }
   if (!dirs.length) {
     out('Nenhuma conta do Claude Code encontrada (~/.claude* com projects/ ou sessions/). Use --conta <pasta> ou HABBLAUD_CLAUDE_DIRS.');
     return 1;
@@ -912,6 +929,8 @@ export interface ModUpdateContext {
   root: string;
   version: string;
   claude: ClaudeRunner;
+  /** Instala o plugin de mensagens onde só o mod está. Padrão: ligado, salvo HABBLAUD_AUTO_MENSAGENS=0. */
+  autoMessages?: boolean;
 }
 
 export interface ModUpdateResult {
@@ -925,7 +944,8 @@ export interface ModUpdateResult {
 /**
  * Para cada conta com o mod instalado numa versão diferente da do package.json: relê o catálogo e atualiza os
  * plugins instalados. Com restos do nome antigo, só avisa (a troca é do mod:install). Com o mod e sem o plugin de
- * mensagens, dá a dica de rodar o mod:install. Nunca instala nada e nunca lança: qualquer falha vira um aviso.
+ * mensagens, instala esse plugin (autoMessages; sem isso, só a dica de rodar o mod:install). Nunca instala o mod do zero
+ * e nunca lança: qualquer falha vira um aviso.
  */
 export function updateInstalledMods(accounts: Array<{ dir: string; label: string }>, ctx: ModUpdateContext): ModUpdateResult {
   const res: ModUpdateResult = { installed: false, unavailable: false, lines: [] };
@@ -945,6 +965,7 @@ export function updateInstalledMods(accounts: Array<{ dir: string; label: string
     res.lines.push({ level: 'warn', text: `não consegui consultar o Claude Code (${cliMessage(probe)}); o mod não foi conferido.` });
     return res;
   }
+  const autoMessages = ctx.autoMessages ?? !/^(0|false|off|nao|não)$/i.test(ctx.env.HABBLAUD_AUTO_MENSAGENS?.trim() ?? '');
   for (const { dir, label } of accounts) {
     const env = accountEnv(ctx.env, dir, ctx.home);
     const state = readAccountState(claude, env);
@@ -952,14 +973,14 @@ export function updateInstalledMods(accounts: Array<{ dir: string; label: string
       res.lines.push({ level: 'warn', text: `mod na ${label}: ${state.error}` });
       continue;
     }
-    const plan = planUpdate(state, { root: ctx.root, version: ctx.version });
+    const plan = planUpdate(state, { root: ctx.root, version: ctx.version, autoMessages });
     if (plan.action !== 'none' || plan.installed) res.installed = true;
     if (plan.action === 'warn') {
       res.lines.push({ level: 'warn', text: `mod na ${label}: ${plan.message}` });
       continue;
     }
     if (plan.action === 'update') res.lines.push(applyUpdate(plan.steps, { claude, env, version: ctx.version, label }));
-    // Tem o mod e não o plugin de mensagens (que veio depois): o docker:up não o instala sozinho, só dá a dica.
+    // Tem o mod e não o plugin de mensagens e a instalação automática está desligada (ou não deu): só a dica.
     if (plan.hint) res.lines.push({ level: 'info', text: `Dica para a ${label}: ${plan.hint}` });
   }
   return res;
@@ -978,7 +999,12 @@ function applyUpdate(steps: CliStep[], o: { claude: ClaudeRunner; env: NodeJS.Pr
   const ids = steps.flatMap((s) => (s.plugin ? [s.plugin] : []));
   const issues = 'error' in after ? [after.error] : verifyInstall(after, ids, o.version);
   if (issues.length) return { level: 'warn', text: `mod na ${o.label}: ${issues.join('; ')}` };
-  return { level: 'info', text: `Mod atualizado para ${o.version} na ${o.label}; sessões abertas: /reload-plugins` };
+  const addedMessages = steps.some((s) => s.args[1] === 'install');
+  const updated = steps.some((s) => s.args[1] === 'update' && s.plugin);
+  const text = addedMessages
+    ? `Plugin de mensagens instalado${updated ? ` e mod atualizado para ${o.version}` : ''} na ${o.label}; sessões abertas: /reload-plugins`
+    : `Mod atualizado para ${o.version} na ${o.label}; sessões abertas: /reload-plugins`;
+  return { level: 'info', text };
 }
 
 async function main(): Promise<void> {
