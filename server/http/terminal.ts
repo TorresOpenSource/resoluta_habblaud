@@ -10,6 +10,7 @@
 // novo. Agentes do demo não têm transcript: a conversa fictícia sai de demoTerminalEntries a cada ~500 ms.
 // Sessões do histórico (GET /api/sessions/:conta/:sessionId/terminal, http/sessions.ts) usam o mesmo
 // leitor sobre o transcript já validado pela rota, com polling mais espaçado (~2 s).
+import { readFileSync, statSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { demoTerminalEntries } from '../../shared/demo/terminal';
 import type { Activity, AgentInfo, TerminalEntry, TerminalInit } from '../../shared/types';
@@ -146,6 +147,67 @@ class TranscriptSource implements ConversationSource {
       parseInto(this.parser, r.lines, fresh);
       if (!r.more) break;
     }
+    return { append: fresh };
+  }
+}
+
+/** Maior arquivo de mensagens lido inteiro (o do Cline é um documento JSON; acima disto o terminal não abre). */
+const SNAPSHOT_MAX_BYTES = 32 * 1024 * 1024;
+
+/**
+ * Transcript que é UM documento (o do Cline): relê quando o arquivo muda e manda só as entradas de id novo. Se alguma
+ * entrada já mostrada sumiu (arquivo regravado de outro jeito), manda um `init` novo. Um arquivo lido pela metade (o
+ * Cline está gravando) não é JSON válido: espera o próximo ciclo.
+ */
+class SnapshotSource implements ConversationSource {
+  private seen = new Set<string>();
+  private stamp = '';
+
+  constructor(
+    private readonly agentId: string,
+    private readonly path: string,
+    private readonly parser: TerminalParser & { parseWhole: NonNullable<TerminalParser['parseWhole']> },
+    private readonly initEntries: number,
+    readonly intervalMs: number,
+  ) {}
+
+  private read(): TerminalEntry[] | undefined {
+    const st = statSync(this.path);
+    if (st.size > SNAPSHOT_MAX_BYTES) throw new Error('arquivo de mensagens grande demais');
+    this.stamp = `${st.size}:${st.mtimeMs}`;
+    const text = readFileSync(this.path, 'utf8');
+    const entries = this.parser.parseWhole(text);
+    // documento incompleto: nada de entradas e o arquivo não é um JSON válido
+    if (!entries.length && text.trim() && !text.trimEnd().endsWith('}')) return undefined;
+    return entries;
+  }
+
+  load(): TerminalInit {
+    let all: TerminalEntry[] = [];
+    try {
+      all = this.read() ?? [];
+    } catch {
+      // arquivo sumido ou ilegível: terminal vazio; o polling tenta de novo
+    }
+    this.seen = new Set(all.map((e) => e.id));
+    const entries = all.slice(-this.initEntries);
+    return { agentId: this.agentId, entries, truncated: entries.length < all.length };
+  }
+
+  poll(): PollResult {
+    let st;
+    try {
+      st = statSync(this.path);
+    } catch {
+      return {};
+    }
+    if (`${st.size}:${st.mtimeMs}` === this.stamp) return {};
+    const all = this.read();
+    if (!all) return {};
+    const ids = new Set(all.map((e) => e.id));
+    for (const id of this.seen) if (!ids.has(id)) return { init: this.load() };
+    const fresh = all.filter((e) => !this.seen.has(e.id));
+    for (const e of fresh) this.seen.add(e.id);
     return { append: fresh };
   }
 }
@@ -290,7 +352,19 @@ export class TerminalStreams {
       if (!path) return 'transcript do agente não encontrado';
       const parserFor = this.opts.parserFor;
       const createParser = parserFor ? () => parserFor(agentId) ?? this.createParser() : this.createParser;
-      const o = { transcriptPathOf: this.opts.transcriptPathOf, createParser, initTailBytes: this.initTailBytes, initEntries: this.initEntries };
+      // O primeiro parser serve para ver o tipo do transcript e já é o que o terminal usa (um por conexão, nunca a mais).
+      let first: TerminalParser | undefined = createParser();
+      if (first.parseWhole) return new SnapshotSource(agentId, path, first as TerminalParser & { parseWhole: NonNullable<TerminalParser['parseWhole']> }, this.initEntries, this.pollMs);
+      const o = {
+        transcriptPathOf: this.opts.transcriptPathOf,
+        createParser: () => {
+          const p = first ?? createParser();
+          first = undefined;
+          return p;
+        },
+        initTailBytes: this.initTailBytes,
+        initEntries: this.initEntries,
+      };
       return new TranscriptSource(agentId, path, o, this.pollMs);
     }
     // Os agentes do demo não estão entre os reais do Office, mas office.detail os encontra.

@@ -579,3 +579,62 @@ describe('ClaudeWatcher.transcriptPathOf', () => {
     }
   });
 });
+
+// ------------------------------------------------------------------ transcript que é um documento (Cline)
+
+describe('terminal: transcript em documento JSON (parseWhole)', () => {
+  /** {"ids": ["a", "b"]} -> uma entrada por id. */
+  const wholeParser = (): TerminalParser => ({
+    push: () => [],
+    parseWhole(text) {
+      try {
+        return ((JSON.parse(text) as { ids: string[] }).ids ?? []).map((id) => user(id));
+      } catch {
+        return [];
+      }
+    },
+  });
+  const doc = (...ids: string[]) => JSON.stringify({ ids });
+
+  it('init com a conversa; depois só as entradas novas (sem repetir), ignorando gravação pela metade', async () => {
+    const env = await serve({ streams: { createParser: wholeParser } });
+    try {
+      const file = join(env.dir, 'messages.json');
+      writeFileSync(file, doc('a', 'b'));
+      env.paths.set(MAIN, file);
+      const r = await open(env.base, route(MAIN));
+      await waitFor(() => expect(inits(r)).toHaveLength(1));
+      expect(inits(r)[0].entries.map((e) => e.id)).toEqual(['a', 'b']);
+
+      writeFileSync(file, '{"ids": ["a", "b", "c"'); // o Cline ainda está gravando
+      await sleep(80);
+      expect(appendIds(r)).toEqual([]);
+
+      writeFileSync(file, doc('a', 'b', 'c'));
+      await waitFor(() => expect(appendIds(r)).toEqual(['c']));
+      writeFileSync(file, doc('a', 'b', 'c', 'd', 'e'));
+      await waitFor(() => expect(appendIds(r)).toEqual(['c', 'd', 'e']));
+      expect(view(r)).toEqual(['a', 'b', 'c', 'd', 'e']);
+      r.close();
+    } finally {
+      await env.close();
+    }
+  });
+
+  it('arquivo regravado de outro jeito (entrada sumiu): novo init', async () => {
+    const env = await serve({ streams: { createParser: wholeParser } });
+    try {
+      const file = join(env.dir, 'messages.json');
+      writeFileSync(file, doc('a', 'b', 'c'));
+      env.paths.set(MAIN, file);
+      const r = await open(env.base, route(MAIN));
+      await waitFor(() => expect(inits(r)).toHaveLength(1));
+      writeFileSync(file, doc('x', 'y'));
+      await waitFor(() => expect(inits(r)).toHaveLength(2));
+      expect(view(r)).toEqual(['x', 'y']);
+      r.close();
+    } finally {
+      await env.close();
+    }
+  });
+});

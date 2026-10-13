@@ -40,7 +40,7 @@ import {
 } from './model';
 import { isLocalHostname, PermissionCard } from './permission';
 import { canRenameRoom } from './roomrename';
-import { accountChipLabel, accountProvider, CODEX_LIVE_HINT, codexApprovalLabel, providerOf } from './provider';
+import { accountChipLabel, accountProvider, CODEX_LIVE_HINT, codexApprovalLabel, hasTerminal, PROVIDER_NAME, providerOf } from './provider';
 import { createAgentRow, updateAgentRow } from './rows';
 import { SocialSection } from './social';
 import { TERMINAL_UNAVAILABLE_HINT, type TerminalControl } from './terminal';
@@ -627,7 +627,8 @@ class AgentView {
     const available = !!this.ctx.store.snapshot?.meta.terminal;
     const open = this.terminal.agentId === this.id;
     // aria-disabled (e não disabled): o botão continua focável e a dica do porquê aparece no hover.
-    const enabled = open || (available && live);
+    const supported = hasTerminal(provider);
+    const enabled = open || (available && live && supported);
     setAttr(this.termBtn, 'aria-disabled', enabled ? null : 'true');
     this.termBtn.classList.toggle('is-disabled', !enabled);
     setAttr(this.termBtn, 'aria-pressed', String(open));
@@ -637,13 +638,15 @@ class AgentView {
       this.termBtn,
       open
         ? 'Fechar o terminal (T)'
-        : !available
-          ? this.ctx.store.replaying
-            ? 'Sem terminal no timelapse: a conversa é a de agora, não a do momento reproduzido.'
-            : TERMINAL_UNAVAILABLE_HINT
-          : !live
-            ? 'O agente já saiu do escritório.'
-            : `Ver a conversa desta sessão como no ${provider === 'codex' ? 'Codex' : 'terminal do Claude Code'}, ao vivo (T)`,
+        : !supported
+          ? `O ${PROVIDER_NAME[provider]} só aparece com presença e status: não há conversa para mostrar.`
+          : !available
+            ? this.ctx.store.replaying
+              ? 'Sem terminal no timelapse: a conversa é a de agora, não a do momento reproduzido.'
+              : TERMINAL_UNAVAILABLE_HINT
+            : !live
+              ? 'O agente já saiu do escritório.'
+              : `Ver a conversa desta sessão como no ${provider === 'codex' ? 'Codex' : 'terminal do Claude Code'}, ao vivo (T)`,
     );
   }
 

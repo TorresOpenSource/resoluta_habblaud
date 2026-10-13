@@ -21,6 +21,7 @@ import { truncate } from '../../shared/activity';
 import { describeMessage, MESSAGE_MAX } from '../../shared/messages';
 import type { Activity, AgentInfo, InboxMessage, OutboxMessage } from '../../shared/types';
 import { errMsg, log } from '../log';
+import type { ClineRunner } from './cline';
 import type { CodexQueueResult, CodexQueueRunner } from './codex';
 
 /** Sessão que perguntou pela caixa de entrada há até este tempo: recebe mensagens (canMessage). */
@@ -50,6 +51,9 @@ export const ERR_CODEX_SLOW = 'o Codex demorou demais com as mensagens anteriore
 export const ERR_CODEX_NOT_CONFIRMED = 'o auxiliar do Codex não confirmou a entrega';
 export const ERR_CODEX_HOME = 'a pasta da conta do Codex deste agente é desconhecida';
 export const ERR_CODEX_REFUSED = 'o codex queue não aceitou a mensagem';
+export const ERR_CLINE_UNAVAILABLE = 'não há como entregar ao Cline agora: rode o Habblaud fora do Docker, com o Cline aberto';
+export const ERR_CLINE_REFUSED = 'o hub do Cline não aceitou a mensagem';
+export const ERR_STATUS_ONLY = 'este agente só aparece com presença e status: não recebe mensagens';
 
 const ERROR_MAX = 300;
 const ID_MAX = 300;
@@ -58,6 +62,7 @@ const ACK_MAX = 50;
 /** O que o registro usa do Office (interface mínima: facilita os testes). */
 export interface OfficeLike {
   get(id: string): AgentInfo | undefined;
+  roomPath?(roomId: string): string | undefined;
   list(): AgentInfo[];
   markDirty(): void;
   addActivity(id: string, activity: Activity, current: boolean): void;
@@ -79,6 +84,8 @@ export interface MessageRegistryOptions {
   demoDeliver?: (agentId: string, text: string) => boolean;
   /** Mensagens aos agentes do Codex; ausente = eles não recebem. */
   codex?: CodexDeliveryOptions;
+  /** Mensagens aos agentes do Cline, pelo hub local dele; ausente = eles não recebem. */
+  cline?: { run: ClineRunner };
   now?: () => number;
   /** Intervalo do relógio interno (start). */
   tickMs?: number;
@@ -118,6 +125,8 @@ interface Entry {
   demo?: boolean;
   /** Mensagem a um agente do Codex: sai pelo entregador do Codex ('node' = o servidor rodou; 'bridge' = o auxiliar). */
   codex?: true;
+  /** Mensagem a um agente do Cline: sai direto pelo hub dele. */
+  cline?: true;
   via?: 'node' | 'bridge';
   /** Falhou por falta de confirmação: uma confirmação atrasada ainda corrige a situação. */
   late?: boolean;
@@ -147,7 +156,8 @@ const isFinal = (e: Entry) => e.msg.status === 'delivered' || e.msg.status === '
 function unavailableReason(a: AgentInfo, reachable: boolean): string | undefined {
   if (a.kind !== 'main') return 'subagentes não recebem mensagens: mande para o agente principal';
   if (!present(a)) return 'o agente já saiu do escritório';
-  if (!reachable) return a.provider === 'codex' ? ERR_CODEX_UNAVAILABLE : 'a sessão não está com o plugin habblaud-mensagens conectado (npm run mod:install)';
+  if (a.provider === 'antigravity') return ERR_STATUS_ONLY;
+  if (!reachable) return a.provider === 'codex' ? ERR_CODEX_UNAVAILABLE : a.provider === 'cline' ? ERR_CLINE_UNAVAILABLE : 'a sessão não está com o plugin habblaud-mensagens conectado (npm run mod:install)';
   return undefined;
 }
 
@@ -229,12 +239,14 @@ export class MessageRegistry {
     const out = new Set<string>();
     for (const id of this.seen.keys()) if (this.canMessage(id)) out.add(id);
     if (this.codexAvailable()) for (const a of this.opts.office.list()) if (a.provider === 'codex' && a.kind === 'main' && present(a)) out.add(a.id);
+    if (this.opts.cline) for (const a of this.opts.office.list()) if (a.provider === 'cline' && a.kind === 'main' && present(a)) out.add(a.id);
     return out;
   }
 
   canMessage(agentId: string): boolean {
     const a = this.opts.office.get(agentId);
     if (a?.provider === 'codex') return this.codexAvailable() && present(a) && a.kind === 'main';
+    if (a?.provider === 'cline') return !!this.opts.cline && present(a) && a.kind === 'main';
     const at = this.seen.get(agentId);
     if (at === undefined || this.now() - at >= this.presenceMs) return false;
     return present(a) && a.kind === 'main';
@@ -268,9 +280,11 @@ export class MessageRegistry {
     const entry: Entry = { msg: { id, agentId, status: 'queued', createdAt: now, updatedAt: now }, text, activity: describeMessage(text) };
     if (demo) entry.demo = true;
     else if (real?.provider === 'codex') entry.codex = true;
+    else if (real?.provider === 'cline') entry.cline = true;
     this.messages.set(id, entry);
     const out = { ...entry.msg };
     if (entry.codex) this.pumpCodex();
+    if (entry.cline) this.pumpCline();
     return { message: out };
   }
 
@@ -289,10 +303,10 @@ export class MessageRegistry {
     const session = shortStr(r?.session, ID_MAX);
     if (!r || !session) throw new InvalidRequest('esperado {session, account?}');
     const account = shortStr(r.account, ID_MAX);
-    // O plugin é do Claude Code: agentes do Codex nunca recebem por aqui.
+    // O plugin é do Claude Code: agentes de outras ferramentas nunca recebem por aqui.
     const agent = this.opts.office
       .list()
-      .find((a) => a.kind === 'main' && a.provider !== 'codex' && a.sessionId === session && (!account || a.account === account) && present(a));
+      .find((a) => a.kind === 'main' && (a.provider ?? 'claude') === 'claude' && a.sessionId === session && (!account || a.account === account) && present(a));
     if (!agent) return [];
 
     const now = this.now();
@@ -304,7 +318,7 @@ export class MessageRegistry {
     const out: InboxMessage[] = [];
     for (const e of this.messages.values()) {
       if (out.length >= INBOX_BATCH) break;
-      if (e.demo || e.codex || e.msg.agentId !== agent.id || e.msg.status !== 'queued') continue;
+      if (e.demo || e.codex || e.cline || e.msg.agentId !== agent.id || e.msg.status !== 'queued') continue;
       this.setStatus(e, 'sent', now);
       e.session = session;
       e.sentAt = now;
@@ -325,7 +339,7 @@ export class MessageRegistry {
     const now = this.now();
     for (const x of ackResults(r)) {
       const e = this.messages.get(x.id);
-      if (!e || e.demo || e.codex || e.session !== session) continue;
+      if (!e || e.demo || e.codex || e.cline || e.session !== session) continue;
       if (e.msg.status !== 'sent' && !(e.msg.status === 'failed' && e.late)) continue;
       if (x.ok) this.finish(e, 'delivered', now);
       else this.fail(e, now, x.error ?? ERR_REFUSED);
@@ -399,8 +413,8 @@ export class MessageRegistry {
       }
       if (!present(this.opts.office.get(e.msg.agentId))) this.fail(e, now, ERR_GONE);
       else if (e.msg.status === 'queued' && now - e.msg.createdAt >= this.queuedTimeoutMs) {
-        this.fail(e, now, !e.codex ? ERR_NOT_FETCHED : this.opts.codex?.run ? ERR_CODEX_SLOW : ERR_CODEX_NOT_FETCHED);
-      } else if (e.msg.status === 'sent' && now - (e.sentAt ?? now) >= this.sentTimeoutMs) {
+        this.fail(e, now, e.cline ? ERR_CLINE_REFUSED : !e.codex ? ERR_NOT_FETCHED : this.opts.codex?.run ? ERR_CODEX_SLOW : ERR_CODEX_NOT_FETCHED);
+      } else if (e.msg.status === 'sent' && !e.cline && now - (e.sentAt ?? now) >= this.sentTimeoutMs) {
         this.fail(e, now, e.codex ? ERR_CODEX_NOT_CONFIRMED : ERR_NOT_CONFIRMED);
         e.late = true;
       }
@@ -417,6 +431,7 @@ export class MessageRegistry {
       if (!this.opts.codex?.run) this.opts.office.markDirty();
     }
     this.pumpCodex();
+    this.pumpCline();
   }
 
   // ---------------------------------------------------------------- internos
@@ -457,6 +472,41 @@ export class MessageRegistry {
         (err: unknown) => this.codexDone(e, { ok: false, error: errMsg(err) }),
       );
     }
+  }
+
+  /**
+   * Entrega ao Cline pelo hub dele: uma mensagem por vez por agente, na ordem. O entregador já responde quando o hub
+   * aceita (o prazo é dele), então não há prazo de confirmação aqui.
+   */
+  private pumpCline(): void {
+    const run = this.opts.cline?.run;
+    if (!run) return;
+    const busy = new Set<string>();
+    for (const e of this.messages.values()) if (e.cline && e.msg.status === 'sent') busy.add(e.msg.agentId);
+    const now = this.now();
+    for (const e of this.messages.values()) {
+      if (!e.cline || e.msg.status !== 'queued' || busy.has(e.msg.agentId)) continue;
+      busy.add(e.msg.agentId);
+      const a = this.opts.office.get(e.msg.agentId);
+      if (!present(a)) {
+        this.fail(e, now, ERR_GONE);
+        continue;
+      }
+      this.setStatus(e, 'sent', now);
+      e.sentAt = now;
+      run({ sessionId: a.sessionId, cwd: this.opts.office.roomPath?.(a.roomId), text: e.text }).then(
+        (r) => this.clineDone(e, r),
+        (err: unknown) => this.clineDone(e, { ok: false, error: errMsg(err) }),
+      );
+    }
+  }
+
+  private clineDone(e: Entry, r: { ok: true } | { ok: false; error: string }): void {
+    if (this.messages.get(e.msg.id) !== e || e.msg.status !== 'sent') return;
+    const now = this.now();
+    if (r.ok) this.finish(e, 'delivered', now);
+    else this.fail(e, now, truncate(r.error, ERROR_MAX) || ERR_CLINE_REFUSED);
+    this.pumpCline();
   }
 
   /** Fim de um `codex queue` rodado daqui. */

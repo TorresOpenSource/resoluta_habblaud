@@ -7,11 +7,16 @@ import type { AccountInfo, OfficeSnapshot, Provider } from '../../../shared/type
 import { shortcutHint } from './model';
 
 /** Nome de cada ferramenta como aparece nos textos. */
-export const PROVIDER_NAME: Record<Provider, string> = { claude: 'Claude Code', codex: 'Codex' };
+export const PROVIDER_NAME: Record<Provider, string> = { claude: 'Claude Code', codex: 'Codex', cline: 'Cline', antigravity: 'Antigravity' };
 
 /** Ferramenta de um agente, conta, sessão ou pedido (ausente = Claude Code). */
 export function providerOf(x: { provider?: Provider } | null | undefined): Provider {
   return x?.provider ?? 'claude';
+}
+
+/** O terminal (a conversa ao vivo) existe para esta ferramenta? O Antigravity só mostra presença e status. */
+export function hasTerminal(provider: Provider): boolean {
+  return provider === 'claude' || provider === 'codex' || provider === 'cline';
 }
 
 export function isCodex(x: { provider?: Provider } | null | undefined): boolean {

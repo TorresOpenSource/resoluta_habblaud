@@ -3,6 +3,7 @@
 //   npm run dev    -> tsx server/index.ts --dev (Vite em middleware mode, HMR no mesmo servidor)
 //   npm start      -> node dist/server/index.js (serve dist/client)
 import http from 'node:http';
+import { existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { codexDirsRefused } from './accounts/detect';
 import { AccountsService } from './accounts/service';
@@ -25,6 +26,7 @@ import { HistorySet, SourceSet } from './sources/source';
 import { createPermissionRoutes } from './permissions/http';
 import { PermissionRegistry } from './permissions/registry';
 import { codexAccountOf } from './codex/http';
+import { createClineSender } from './messages/cline';
 import { createCodexQueueRunner, findCodexBin } from './messages/codex';
 import { createMessageRoutes } from './messages/http';
 import { MessageRegistry } from './messages/registry';
@@ -33,6 +35,11 @@ import { ClaudeWatcher } from './sources/watcher';
 import { discoverCodexDirs } from './sources/codex/accounts';
 import { CodexHistory } from './sources/codex/history';
 import { CodexSource } from './sources/codex/source';
+import { defaultAntigravityDir, scanAntigravity } from './sources/antigravity/scan';
+import { ClineApprovals } from './sources/cline/approvals';
+import { defaultClineDir, scanCline } from './sources/cline/scan';
+import { createClineTerminalParser } from './sources/cline/terminal';
+import { PollSource } from './sources/poll/source';
 import { createBuildReader } from './build';
 import { UpdateChecker } from './updates/checker';
 
@@ -96,6 +103,15 @@ const agents = new SourceSet([claude]);
 const codexDirs = config.codex ? discoverCodexDirs(process.env, config.home) : [];
 const codex = codexDirs.length ? new CodexSource({ accounts, office, dirs: codexDirs, env: process.env, home: config.home }) : undefined;
 if (codex) agents.add(codex);
+// Cline e Antigravity (só presença e status, sources/poll/source.ts): entram quando a pasta de dados deles existe.
+const clineDir = config.cline ? defaultClineDir(config.home, process.env) : undefined;
+if (clineDir && existsSync(join(clineDir, 'data', 'db', 'sessions.db'))) {
+  agents.add(new PollSource({ provider: 'cline', accounts, office, dir: clineDir, account: { id: '.cline', short: 'L', name: 'Cline', color: '#e8c44a' }, role: 'Agente principal (Cline)', scan: () => scanCline(clineDir), terminalParser: createClineTerminalParser }));
+}
+const antigravityDir = config.antigravity ? defaultAntigravityDir(config.home, process.env) : undefined;
+if (antigravityDir && existsSync(join(antigravityDir, 'conversation_summaries.db'))) {
+  agents.add(new PollSource({ provider: 'antigravity', accounts, office, dir: antigravityDir, account: { id: '.antigravity', short: 'A', name: 'Antigravity', color: '#4a8ee8' }, role: 'Agente principal (Antigravity)', scan: () => scanAntigravity(antigravityDir) }));
+}
 // Eventos dos hooks do Codex (POST /api/codex/events, mod/habblaud-codex/hook.mjs): vão para a fonte do Codex ao vivo
 // (CodexLive); sem ela (nenhuma pasta do Codex ou HABBLAUD_CODEX=0) a rota responde {ok: false}.
 const codexLive: CodexLive | undefined = codex;
@@ -138,6 +154,8 @@ late.permissions = permissions;
 // fora do Docker o próprio servidor roda o comando (HABBLAUD_CODEX_BIN ou `codex` do PATH); no Docker, o auxiliar do
 // host (npm run codex:bridge).
 const codexBin = config.messages && !config.inDocker ? findCodexBin(process.env) : undefined;
+// Ao Cline, pelo hub local dele (messages/cline.ts; só fora do Docker, com acesso local como as outras).
+const clineSender = config.messages && !config.inDocker && clineDir ? createClineSender({ dir: clineDir, version: config.version }) : undefined;
 const messages = config.messages
   ? new MessageRegistry({
       office,
@@ -147,6 +165,7 @@ const messages = config.messages
         run: codexBin ? createCodexQueueRunner(codexBin) : undefined,
         homeOf: (account) => accounts.entriesOf('codex').find((e) => e.id === account)?.detected.configDir,
       },
+      cline: clineSender ? { run: clineSender } : undefined,
     })
   : undefined;
 late.messages = messages;
@@ -161,6 +180,9 @@ if (timeline) {
   timeline.ingest(hub.current());
 }
 permissions?.start();
+// Aprovar pelo escritório os pedidos do Cline (hub local dele): só com a trava do terminal, fora do Docker e com página aberta.
+const clineApprovals = permissions && clineDir && !config.inDocker ? new ClineApprovals({ dir: clineDir, office, permissions, active: () => hub.localSize > 0, version: config.version }) : undefined;
+clineApprovals?.start();
 messages?.start();
 stats.start();
 updates.start();
@@ -308,6 +330,7 @@ function shutdown(signal: string): void {
   terminals?.stop();
   timeline?.stop();
   permissions?.stop();
+  clineApprovals?.stop();
   messages?.stop();
   updates.stop();
   names.flush();

@@ -19,6 +19,11 @@ import { forkDirective, parseTaskNotification } from './transcript';
 export interface TerminalParser {
   /** Interpreta uma linha do JSONL. Linhas inválidas ou irrelevantes devolvem []. */
   push(line: string): TerminalEntry[];
+  /**
+   * Só para transcripts que não são JSONL (o Cline grava um documento JSON inteiro): converte o arquivo todo. O terminal
+   * relê o arquivo quando ele muda e manda só as entradas de id novo; `push` não é usado.
+   */
+  parseWhole?(text: string): TerminalEntry[];
 }
 
 // ------------------------------------------------------------------ limites (caracteres)
