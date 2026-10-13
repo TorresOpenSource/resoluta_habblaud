@@ -13,6 +13,7 @@ import type { AgentInfo } from '../../../shared/types';
 import { errMsg, log } from '../../log';
 import { readHubEndpoint, type SocketFactory, type SocketLike } from '../../messages/cline';
 import type { PermissionRegistry } from '../../permissions/registry';
+import { tr } from '../../../shared/i18n';
 
 const AUTH_PREFIX = 'cline-hub-auth.';
 /** Quantas vezes por segundo se confere se há página aberta e se a conexão precisa mudar. */
@@ -104,7 +105,7 @@ export class ClineApprovals {
       const requestId = rid('hubreq_');
       const timer = setTimeout(() => {
         c.pending.delete(requestId);
-        resolve({ ok: false, error: 'sem resposta do hub do Cline' });
+        resolve({ ok: false, error: tr('sem resposta do hub do Cline') });
       }, COMMAND_TIMEOUT_MS);
       timer.unref?.();
       c.pending.set(requestId, (ok, error) => {
@@ -116,7 +117,7 @@ export class ClineApprovals {
       } catch {
         c.pending.delete(requestId);
         clearTimeout(timer);
-        resolve({ ok: false, error: 'conexão com o hub do Cline fechada' });
+        resolve({ ok: false, error: tr('conexão com o hub do Cline fechada') });
       }
     });
   }
@@ -139,7 +140,7 @@ export class ClineApprovals {
       if (this.conn === c) this.fail();
     });
     socket.addEventListener('close', () => {
-      for (const cb of c.pending.values()) cb(false, 'conexão com o hub do Cline fechada');
+      for (const cb of c.pending.values()) cb(false, tr('conexão com o hub do Cline fechada'));
       c.pending.clear();
       if (this.conn === c) {
         this.conn = null;
@@ -161,14 +162,14 @@ export class ClineApprovals {
         });
         if (this.conn !== c) return;
         if (!reg.ok) {
-          log.warnOnce(`cline-approvals-register:${reg.error}`, `Aprovações do Cline: o hub recusou o registro (${reg.error ?? 'sem motivo'}).`);
+          log.warnOnce(`cline-approvals-register:${reg.error}`, tr('Aprovações do Cline: o hub recusou o registro ({0}).', [reg.error ?? tr('sem motivo')]));
           return this.fail();
         }
         c.registered = true;
         // sem sessão = todas; o hub reenvia os pedidos pendentes ao assinar
         socket.send(JSON.stringify({ kind: 'stream.subscribe', clientId: c.clientId }));
       })().catch((err) => {
-        log.warnOnce(`cline-approvals:${errMsg(err)}`, `Aprovações do Cline: ${errMsg(err)}`);
+        log.warnOnce(`cline-approvals:${errMsg(err)}`, tr('Aprovações do Cline: {0}', [errMsg(err)]));
         if (this.conn === c) this.fail();
       });
     });
@@ -216,9 +217,9 @@ export class ClineApprovals {
       if (outcome.status !== 'decided' || outcome.behavior === 'answer') return;
       // a conexão de agora (o pedido pode ter vindo numa anterior e voltado no reenvio ao reconectar)
       const live = this.conn?.registered ? this.conn : undefined;
-      if (!live) return log.warnOnce('cline-approval-offline', 'Aprovações do Cline: sem conexão com o hub para entregar a decisão (responda no app do Cline).');
+      if (!live) return log.warnOnce('cline-approval-offline', tr('Aprovações do Cline: sem conexão com o hub para entregar a decisão (responda no app do Cline).'));
       void this.command(live, 'approval.respond', { approvalId, approved: outcome.behavior === 'allow', ...(outcome.message ? { reason: outcome.message } : {}) }).then((r) => {
-        if (!r.ok) log.warnOnce(`cline-approval-respond:${r.error}`, `Aprovações do Cline: o hub não aceitou a resposta (${r.error ?? 'sem motivo'}).`);
+        if (!r.ok) log.warnOnce(`cline-approval-respond:${r.error}`, tr('Aprovações do Cline: o hub não aceitou a resposta ({0}).', [r.error ?? tr('sem motivo')]));
       });
     });
   }

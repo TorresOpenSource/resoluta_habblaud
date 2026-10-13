@@ -12,6 +12,7 @@
 // host), e nunca vai para log, erro, resposta da página nem para o navegador. O texto vai como foi digitado.
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { tr } from '../../shared/i18n';
 
 /** Prazo para o hub aceitar a mensagem (conectar, registrar e abrir o turno ou enfileirar). */
 export const ACCEPT_TIMEOUT_MS = 20_000;
@@ -98,7 +99,7 @@ export function createClineSender(opts: ClineSenderOptions): ClineRunner {
   return (job) =>
     new Promise<ClineResult>((resolve) => {
       const hub = readHubEndpoint(opts.dir);
-      if (!hub) return resolve({ ok: false, error: 'o hub do Cline não está no ar (abra o Cline) ou o endereço dele não é local' });
+      if (!hub) return resolve({ ok: false, error: tr('o hub do Cline não está no ar (abra o Cline) ou o endereço dele não é local') });
 
       const clientId = rid('habblaud_');
       const pending = new Map<string, (ok: boolean, error?: string) => void>();
@@ -132,21 +133,21 @@ export function createClineSender(opts: ClineSenderOptions): ClineRunner {
       try {
         socket = make(hub.url, [`${AUTH_PREFIX}${hub.token}`]);
       } catch {
-        return resolve({ ok: false, error: 'não consegui conectar ao hub do Cline' });
+        return resolve({ ok: false, error: tr('não consegui conectar ao hub do Cline') });
       }
       acceptTimer = setTimeout(() => {
-        done({ ok: false, error: 'o hub do Cline não aceitou a mensagem a tempo' });
+        done({ ok: false, error: tr('o hub do Cline não aceitou a mensagem a tempo') });
         closeAll();
       }, acceptMs);
 
       socket.addEventListener('error', () => {
-        done({ ok: false, error: 'não consegui conectar ao hub do Cline' });
+        done({ ok: false, error: tr('não consegui conectar ao hub do Cline') });
         closeAll();
       });
       socket.addEventListener('close', () => {
-        done({ ok: false, error: 'o hub do Cline fechou a conexão' });
+        done({ ok: false, error: tr('o hub do Cline fechou a conexão') });
         if (holdTimer) clearTimeout(holdTimer);
-        for (const cb of pending.values()) cb(false, 'o hub do Cline fechou a conexão');
+        for (const cb of pending.values()) cb(false, tr('o hub do Cline fechou a conexão'));
         pending.clear();
       });
       socket.addEventListener('message', (ev) => {
@@ -182,16 +183,16 @@ export function createClineSender(opts: ClineSenderOptions): ClineRunner {
               workspaceContext: { workspaceRoot: job.cwd, cwd: job.cwd },
             });
             if (!reg.ok) {
-              done({ ok: false, error: reg.error ?? 'o hub do Cline recusou o registro' });
+              done({ ok: false, error: reg.error ?? tr('o hub do Cline recusou o registro') });
               return closeAll();
             }
             socket.send(JSON.stringify({ kind: 'stream.subscribe', clientId, sessionId: job.sessionId }));
             holdTimer = setTimeout(closeAll, holdMs);
             // só responde quando o turno termina; a aceitação já pode ter vindo por evento
             const sent = await command('session.send_input', { prompt: job.text, delivery: 'queue' }, job.sessionId);
-            done(sent.ok ? { ok: true } : { ok: false, error: sent.error ?? 'o Cline não aceitou a mensagem' });
+            done(sent.ok ? { ok: true } : { ok: false, error: sent.error ?? tr('o Cline não aceitou a mensagem') });
           } catch {
-            done({ ok: false, error: 'falha ao falar com o hub do Cline' });
+            done({ ok: false, error: tr('falha ao falar com o hub do Cline') });
           } finally {
             closeAll();
           }

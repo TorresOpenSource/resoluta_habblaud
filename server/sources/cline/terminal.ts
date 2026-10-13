@@ -10,6 +10,7 @@
 // - segredos mascarados e textos truncados com as mesmas regras do terminal do Claude Code.
 import type { TerminalEntry, TerminalInputKind } from '../../../shared/types';
 import { INPUT_MAX, marked, oneLine, prepare, RESULT_MAX, RESULT_MAX_LINES, TEXT_MAX, THINKING_MAX, TITLE_ARG_MAX, type TerminalParser } from '../terminal';
+import { tr } from '../../../shared/i18n';
 
 type Rec = Record<string, unknown>;
 
@@ -161,7 +162,7 @@ export function parseClineMessages(text: string): TerminalEntry[] {
         }
         case 'image':
         case 'file':
-          out.push({ kind: 'system', id, at, text: b.type === 'image' ? '[imagem anexada]' : `[arquivo anexado${str(b.name) ? `: ${oneLine(String(b.name), 80, false)}` : ''}]`, level: 'info' });
+          out.push({ kind: 'system', id, at, text: b.type === 'image' ? tr('[imagem anexada]') : str(b.name) ? tr('[arquivo anexado: {0}]', [oneLine(String(b.name), 80, false)]) : tr('[arquivo anexado]'), level: 'info' });
           return;
       }
     });

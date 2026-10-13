@@ -33,6 +33,81 @@ do meio (0.**3**.0).
 - **Música do YouTube.** Em Configurações › Sons, cole o link de um vídeo ou playlist do YouTube e ele toca em loop (player
   embutido e escondido) no lugar da música sintetizada, enquanto houver trabalho em execução.
 
+## [0.10.0] - 2026-10-13
+
+Para atualizar: `git pull` e `npm run docker:up`. A interface segue o idioma do navegador (ou Configurações › Idioma).
+Os textos que o servidor monta continuam em português; para outro idioma, defina `HABBLAUD_LANG` (`en`, `es` ou `fr`)
+no `.env` antes do `docker:up`. Em outubro, o tema automático já deixa o escritório no clima de Halloween; para o
+visual de sempre, escolha **Nenhum** em Configurações › Aparência.
+
+### Adicionado
+
+- **Temas do escritório** em Configurações › Aparência: decoração em pixel art (árvores com presentes, guirlandas e
+  neve nas janelas no Natal; abóboras, fantasmas, teias e morcegos no Halloween), luzes, tapetes e acessórios nos
+  personagens. **Automático**, o padrão, segue o calendário: Halloween de 1º a 31 de outubro e Natal de 1º de
+  novembro a 26 de dezembro (no resto do ano, o visual de sempre). **Nenhum** deixa o visual de sempre o ano todo, e
+  **Natal** e **Halloween** fixam um tema. A escolha fica salva no navegador.
+- **Interface em inglês, espanhol e francês.** Os textos passam por `tr()` (`shared/i18n.ts`), com o português como
+  língua de origem: um texto sem tradução continua em PT. A interface segue o navegador e pode ser fixada em
+  **Configurações › Idioma**. Os textos montados pelo servidor (atividades, avisos, terminal, logs e scripts de
+  instalação) seguem `HABBLAUD_LANG` (`pt-BR`, `en`, `es` ou `fr`) e, sem ele, o idioma do sistema, menos o inglês
+  (muita máquina e todo container vêm em inglês por padrão): para o servidor em inglês, `HABBLAUD_LANG=en`.
+  `npm run i18n:check` lista os textos ainda sem tradução. O francês veio da comunidade (#67).
+- **README em inglês**, com versões em português (`README.pt-BR.md`), espanhol e francês, e a linha de idiomas no
+  topo de cada um.
+
+## [0.9.0] - 2026-10-13
+
+Para atualizar: `git pull` e `npm run docker:up`. O terminal interativo vem desligado e só funciona fora do Docker:
+`npm install`, `npm run build` e `HABBLAUD_PTY=1 npm start` (leia antes o aviso em "Privacidade e segurança" no
+README).
+
+### Adicionado
+
+- **Terminal interativo (opt-in, `HABBLAUD_PTY=1`):** o Claude Code de verdade numa janela do escritório, com abas para
+  os agentes do mesmo projeto. **Nova sessão** abre um Claude Code na pasta da sala; **Assumir daqui** encerra a sessão
+  aberta noutro terminal e continua a mesma conversa aqui (`claude --resume`); **Encerrar** e o X das abas fecham a
+  sessão, aqui ou noutro terminal. Só para sessões do Claude Code (nem Codex nem demo). Antes de encerrar um processo de
+  fora, o Habblaud confere que o PID ainda é aquele Claude Code. Usa `node-pty` e `@xterm/headless` (dependências
+  opcionais); a tela volta inteira ao reconectar ou trocar de aba, com os modos que o Claude ligou. Ao iniciar, abre
+  um terminal de teste: se o `node-pty` ou o `claude` não funcionarem, o recurso fica desligado, com o motivo no log
+  (no macOS, antes ele corrige a permissão de execução que falta no `spawn-helper` do `node-pty` 1.1.0).
+- **Abas e atalho do terminal:** a janela de terminal ganhou abas com os agentes principais do mesmo projeto (com o
+  começo do que cada um faz), e a lista lateral, um atalho ao lado de cada agente que abre o terminal dele. Com um
+  terminal aberto, clicar noutro agente da lista troca a janela para o dele. Valem também para o terminal ao vivo, com
+  o interativo desligado.
+
+### Corrigido
+
+- Mensagem mandada pelo escritório não vai mais para a conversa errada: se o agente trocar de conversa (`/clear`,
+  `/resume` ou outro thread no Codex) antes de buscá-la, ela falha com o motivo em vez de entrar na conversa nova.
+- As tarefas antigas e seus estados são preservados ao recuperar sessões com histórico longo que ganharam novas tarefas.
+- O detalhe da atividade não mostra mais o segredo de webhooks (Slack, Discord e Telegram) nem de tokens `npm_` e
+  `hf_` colados num comando.
+- Mensagens ao Codex no Docker agora são entregues uma por vez por sessão e confirmadas individualmente, reduzindo
+  falhas prematuras e reenvios duplicados.
+- Listas de tarefas malformadas do Claude Code não interrompem a leitura; o escritório preserva as demais atividades
+  do mesmo lote, inclusive nos subagentes.
+- Uma imagem do Codex gravada no Windows (disco `C:` ou pasta de rede `\\servidor\...`) aparecia com o caminho
+  errado na atividade e no terminal (`/C:/...`, ou a pasta sem o servidor). Agora o caminho é o do arquivo de origem.
+- Salvar um personagem ou voltar ao sorteio não fecha mais outra edição aberta enquanto a resposta chega, nem mostra
+  nela um erro da edição anterior.
+- Uma linha enorme numa conversa, ou uma linha que nunca fechava, ficava inteira na memória e a leitura
+  ia ficando mais lenta. Uma linha acima de 8 MB agora é ignorada, e o Habblaud segue na linha seguinte.
+- Sessões do Codex revertidas passam a mostrar o turno atual no escritório e no terminal, mesmo quando o arquivo da
+  conversa anterior continua no disco.
+- No timelapse, a linha do tempo do agente deixa de mostrar o que aconteceu depois do momento reproduzido quando se
+  volta no tempo. Uma resposta de histórico que ainda estava a caminho também não entra durante o replay.
+- No timelapse, os tempos dos painéis acompanham a reprodução e ficam parados ao pausar, junto com o escritório e o
+  selo do replay.
+- O feed pausado guarda só os 50 eventos mais recentes e libera os dados de sessões antigas, mantendo a contagem de
+  novidades.
+- No timelapse, as setas no controle de velocidade passam a trocar a velocidade, em vez de mover a câmera do escritório.
+- O escritório evita conexões ao vivo duplicadas e libera os recursos de rede e fontes ao ser fechado.
+- `usage:install`, `hooks:install`, `mod:install` e `codex:install` param quando o arquivo de configuração muda
+  no meio da instalação, em vez de apagar essa edição (ela também sumia do backup). Rode o comando de novo; o
+  backup passa a ser o arquivo que foi substituído.
+
 ## [0.8.0] - 2026-10-09
 
 Para atualizar: `git pull` e `npm run docker:up`. Renomear salas e editar o personagem funcionam só pelo próprio

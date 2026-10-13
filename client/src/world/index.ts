@@ -3,7 +3,7 @@
 import * as artModule from '../art';
 import { TILE, type ArtModule } from '../art/api';
 import type { OfficeStore } from '../net/store';
-import { DEFAULT_WORLD_OPTIONS, type Selection, type SocialEvent, type SoundCue, type WorldApi, type WorldOptions, type WorldPlayback } from './api';
+import { DEFAULT_WORLD_OPTIONS, seasonalThemeFor, type Selection, type SocialEvent, type SoundCue, type WorldApi, type WorldOptions, type WorldPlayback } from './api';
 import { loadWorldAssets, type WorldAssets } from './assets';
 import { Camera, overviewFrame } from './camera';
 import { createDebug, type WorldDebug } from './debug';
@@ -219,7 +219,7 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore): Worl
   });
 
   // medições de texto em cache: refaz quando alguma fonte termina de carregar
-  if (document.fonts) document.fonts.addEventListener?.('loadingdone', () => overlay.resetCaches());
+  if (document.fonts) document.fonts.addEventListener?.('loadingdone', () => overlay.resetCaches(), { signal: abort.signal });
 
   // ------------------------------------------------------------------ laço
 
@@ -243,7 +243,7 @@ export function createWorld(canvas: HTMLCanvasElement, store: OfficeStore): Worl
         if (!playback) for (const e of events) for (const cb of socialCbs) cb(e);
         events.length = 0;
       }
-      renderer.sync();
+      renderer.sync(seasonalThemeFor(options.theme, new Date()));
       if (sim.building.cols !== lastCols) {
         lastCols = sim.building.cols;
         updateBounds();
