@@ -393,7 +393,7 @@ describe('mod-install.ts (funções puras)', () => {
       claudeCmd: '/opt/claude',
     });
     expect(parseArgs(['-h'])).toBe('help');
-    expect(() => parseArgs([])).toThrow(/install, uninstall ou status/);
+    expect(() => parseArgs([])).toThrow(/install, uninstall, status ou ensure/);
     expect(() => parseArgs(['install', '--conta'])).toThrow(/--conta/);
     expect(() => parseArgs(['install', '--xyz'])).toThrow(/opção desconhecida/);
   });
@@ -876,7 +876,7 @@ describe('mod-install.ts (CLI falso, HOME falso)', () => {
     expect(updateInstalledMods(accounts, { ...ctx, version: '0.4.0', claude: boom }).unavailable).toBe(true);
   });
 
-  it('docker:up: conta com o mod e sem o plugin de mensagens: não instala nada, só dá a dica (também ao atualizar)', async () => {
+  it('docker:up/ensure: conta com o mod e sem o plugin de mensagens: instala o plugin sozinho (e só a dica com autoMessages desligado)', async () => {
     const accounts = [
       { dir: join(home, '.claude'), label: 'Conta C' },
       { dir: join(home, '.claude-conta2'), label: 'Conta D' },
@@ -886,14 +886,46 @@ describe('mod-install.ts (CLI falso, HOME falso)', () => {
     await exec('install', { messages: false, accounts: [join(home, '.claude-conta2')] });
     fake.calls = [];
     const hint = { level: 'info', text: 'Dica para a Conta D: rode npm run mod:install para mandar mensagens pelo escritório (plugin habblaud-mensagens)' };
-    expect(updateInstalledMods(accounts, { ...ctx, version: '0.2.0' })).toEqual({ installed: true, unavailable: false, lines: [hint] });
+
+    // Desligado (autoMessages: false ou HABBLAUD_AUTO_MENSAGENS=0): o comportamento antigo, só a dica.
+    expect(updateInstalledMods(accounts, { ...ctx, version: '0.2.0', autoMessages: false })).toEqual({ installed: true, unavailable: false, lines: [hint] });
+    expect(updateInstalledMods(accounts, { ...ctx, env: { HOME: home, HABBLAUD_AUTO_MENSAGENS: '0' }, version: '0.2.0' }).lines).toEqual([hint]);
     expect(fake.mutating).toEqual([]);
 
-    fake.folderVersion = '0.3.0';
-    const res = updateInstalledMods(accounts, { ...ctx, version: '0.3.0' });
-    expect(res.lines).toEqual([{ level: 'info', text: 'Mod atualizado para 0.3.0 na Conta D; sessões abertas: /reload-plugins' }, hint]);
-    expect(fake.mutating).toEqual(['plugin marketplace update habblaud', `plugin update ${MOD_PLUGIN} --scope user`, `plugin update ${PERMISSIONS_PLUGIN} --scope user`]);
-    expect(installed('.claude-conta2')[MESSAGES_PLUGIN]).toBeUndefined();
+    // Padrão: instala o plugin de mensagens onde só o mod está.
+    const res = updateInstalledMods(accounts, { ...ctx, version: '0.2.0' });
+    expect(res.lines).toEqual([{ level: 'info', text: 'Plugin de mensagens instalado na Conta D; sessões abertas: /reload-plugins' }]);
+    expect(fake.mutating).toEqual(['plugin marketplace update habblaud', `plugin install ${MESSAGES_PLUGIN} --scope user`]);
+    expect(installed('.claude-conta2')[MESSAGES_PLUGIN]).toBeDefined();
+    // Já instalado: nada a fazer na próxima vez.
+    fake.calls = [];
+    expect(updateInstalledMods(accounts, { ...ctx, version: '0.2.0' }).lines).toEqual([]);
+    expect(fake.mutating).toEqual([]);
     expect(modHint(res)).toEqual([]);
+  });
+
+  it('ensure (antes de npm start/dev): instala as mensagens onde só há o mod, em silêncio quando nada muda e sem falhar', async () => {
+    await exec('install', { messages: false, accounts: [join(home, '.claude-conta2')] });
+    fake.calls = [];
+    out = [];
+    expect(await exec('ensure')).toBe(0);
+    expect(out).toEqual(['[mod] Plugin de mensagens instalado na .claude-conta2; sessões abertas: /reload-plugins']);
+    expect(installed('.claude-conta2')[MESSAGES_PLUGIN]).toBeDefined();
+    // nada mudou: nenhuma linha, saída 0
+    out = [];
+    fake.calls = [];
+    expect(await exec('ensure')).toBe(0);
+    expect(out).toEqual([]);
+    expect(fake.mutating).toEqual([]);
+  });
+
+  it('docker:up: sem o plugin de mensagens e com versão nova: atualiza e instala juntos', async () => {
+    const accounts = [{ dir: join(home, '.claude-conta2'), label: 'Conta D' }];
+    await exec('install', { messages: false, accounts: [join(home, '.claude-conta2')] });
+    fake.calls = [];
+    fake.folderVersion = '0.3.0';
+    const res = updateInstalledMods(accounts, { env: { HOME: home }, home, root, claude: fake.runner, version: '0.3.0' });
+    expect(res.lines).toEqual([{ level: 'info', text: 'Plugin de mensagens instalado e mod atualizado para 0.3.0 na Conta D; sessões abertas: /reload-plugins' }]);
+    expect(fake.mutating).toEqual(['plugin marketplace update habblaud', `plugin install ${MESSAGES_PLUGIN} --scope user`, `plugin update ${MOD_PLUGIN} --scope user`, `plugin update ${PERMISSIONS_PLUGIN} --scope user`]);
   });
 });

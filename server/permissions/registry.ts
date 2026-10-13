@@ -21,6 +21,7 @@ import { ANSWER_OTHER_MAX, answerSummary, ASK_TOOL, checkAnswers } from '../../s
 import type { Activity, AgentInfo, PermissionAnswer, PermissionDecision, PermissionRequestInfo, PermissionSuggestionInfo } from '../../shared/types';
 import { errMsg, log } from '../log';
 import { toolView } from '../sources/terminal';
+import { clineToolView } from './cline';
 import { codexToolView } from './codex';
 import { callSignature, scanToolCall } from './transcript';
 
@@ -123,6 +124,10 @@ interface Pending {
   info: PermissionRequestInfo;
   /** Pedido do Codex (sem a busca da resposta no transcript). */
   codex?: boolean;
+  /** Pedido de um cliente interno (o Cline, pelo hub): a decisão volta por esta função, não por um hook esperando. */
+  native?: (outcome: Exclude<WaitResult, { status: 'pending' }>) => void;
+  /** Id do pedido na ferramenta de origem (o `approvalId` do hub do Cline): impede registrar o mesmo duas vezes. */
+  externalId?: string;
   /** Pergunta (AskUserQuestion): o formato de `tool_input.questions`, por posição (undefined = entrada inválida). */
   askFormat?: Array<AskFormat | undefined>;
   agentId: string;
@@ -162,9 +167,9 @@ function isQuestion(info: { tool: string; provider?: string }): boolean {
   return info.tool === ASK_TOOL && info.provider !== 'codex';
 }
 
-/** O Codex não aceita interromper nem "sempre permitir" (o hook dele só aprova ou recusa com motivo). */
+/** O Codex e o Cline não aceitam interromper nem "sempre permitir" (só aprovar ou recusar, com motivo opcional). */
 function unsupportedByCodex(info: PermissionRequestInfo, d: PermissionDecision): boolean {
-  return info.provider === 'codex' && (d.interrupt === true || d.suggestion !== undefined);
+  return (info.provider === 'codex' || info.provider === 'cline') && (d.interrupt === true || d.suggestion !== undefined);
 }
 
 /**
@@ -245,7 +250,7 @@ export function applyPermission(a: AgentInfo, p: PermissionRequestInfo | undefin
     a.status = 'waiting';
     a.statusSince = p.createdAt;
   }
-  a.waitingFor ??= isQuestion(p) ? 'responder uma pergunta' : p.provider === 'codex' ? 'aprovar um comando' : 'aprovar uma permissão';
+  a.waitingFor ??= isQuestion(p) ? 'responder uma pergunta' : p.provider === 'codex' ? 'aprovar um comando' : p.provider === 'cline' ? 'aprovar uma ferramenta' : 'aprovar uma permissão';
   return a;
 }
 
@@ -436,6 +441,33 @@ export class PermissionRegistry {
     return { id, expiresAt: info.expiresAt + EXPIRY_GRACE_MS };
   }
 
+  /**
+   * Pedido de um cliente interno (hoje o Cline, pelo hub dele): sem hook esperando, a decisão (ou a liberação) volta por
+   * `onOutcome`. Não olha se há página aberta (quem liga isto já só roda com ela) e não expira sozinho antes do prazo
+   * longo. `undefined` = não registrou (agente desconhecido, pedidos demais); o mesmo `externalId` devolve o já aberto.
+   */
+  registerNative(req: { provider: 'cline'; agentId: string; externalId: string; tool: string; input: Rec; cwd?: string }, onOutcome: NonNullable<Pending['native']>): string | undefined {
+    for (const p of this.pending.values()) if (p.externalId === req.externalId && !p.outcome) return p.info.id;
+    const agent = this.opts.office.get(req.agentId);
+    if (!present(agent) || this.size >= this.maxPending) return undefined;
+    const now = this.now();
+    const id = `p-${now.toString(36)}-${++this.seq}-${randomBytes(9).toString('base64url')}`;
+    const view = clineToolView(req.tool, req.input);
+    const info: PermissionRequestInfo = { id, provider: 'cline', tool: req.tool, title: view.title, text: view.text, icon: view.icon, createdAt: now, expiresAt: now + MAX_TIMEOUT_MS };
+    if (view.input) info.input = view.input;
+    if (view.inputKind) info.inputKind = view.inputKind;
+    this.pending.set(id, { info, agentId: req.agentId, sessionId: agent.sessionId, signature: '', lastScanAt: 0, waiters: new Set(), idleSince: now, native: onOutcome, externalId: req.externalId });
+    this.opts.office.addActivity(req.agentId, { id: `${req.agentId}#perm:${id}`, at: now, kind: 'wait', icon: '🔐', text: truncate(`Pede permissão: ${view.text}`, 46), detail: view.title, tool: 'PermissionRequest' }, false);
+    this.opts.office.noticePermission(req.agentId, view.text);
+    this.opts.office.markDirty();
+    return id;
+  }
+
+  /** O pedido foi resolvido na própria ferramenta (ex.: no app do Cline): o cartão some, sem decisão do Habblaud. */
+  releaseExternal(externalId: string): void {
+    for (const p of this.pending.values()) if (p.externalId === externalId && !p.outcome) this.release(p, 'answered');
+  }
+
   /** Detalhe completo de um pedido em aberto (com os argumentos), ou undefined. */
   detail(id: string): PermissionRequestInfo | undefined {
     const p = this.pending.get(id);
@@ -542,10 +574,10 @@ export class PermissionRegistry {
         continue;
       }
       if (now >= p.info.expiresAt + EXPIRY_GRACE_MS) this.release(p, 'expired');
-      else if (!p.waiters.size && now - p.idleSince >= this.orphanMs) this.release(p, 'orphan');
+      else if (!p.native && !p.waiters.size && now - p.idleSince >= this.orphanMs) this.release(p, 'orphan');
       else if (!present(this.opts.office.get(p.agentId))) this.release(p, 'gone');
       // No Codex o terminal só pede a aprovação depois que o hook termina: não há resposta dada lá para procurar.
-      else if (p.codex) continue;
+      else if (p.codex || p.native) continue;
       else if (now - p.lastScanAt >= SCAN_EVERY_MS && this.answeredInTerminal(p, now)) this.release(p, 'answered');
       else if (this.leftWaiting(p, now)) this.release(p, 'answered');
     }
@@ -639,7 +671,14 @@ export class PermissionRegistry {
     const delivered = p.waiters.size > 0;
     for (const w of [...p.waiters]) this.dropWaiter(p, w, outcome);
     // Entregue a quem esperava: some já; senão fica guardado até o hook voltar (ou RESOLVED_KEEP_MS).
-    if (delivered) this.pending.delete(p.info.id);
+    if (p.native) {
+      try {
+        p.native(outcome);
+      } catch (err) {
+        log.warnOnce(`permissions-native:${errMsg(err)}`, `Pedidos de permissão: falha ao entregar a decisão (${errMsg(err)}).`);
+      }
+    }
+    if (delivered || p.native) this.pending.delete(p.info.id);
     this.opts.office.markDirty();
   }
 

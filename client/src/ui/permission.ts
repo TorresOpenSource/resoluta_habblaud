@@ -45,6 +45,9 @@ export function expiryText(expiresAt: number, now: number, seconds = false): str
 /** Aviso do cartão de um pedido do Codex. */
 export const CODEX_PERMISSION_NOTE = 'No Codex, a aprovação só aparece no terminal depois que você responder aqui ou o prazo acabar.';
 
+/** Aviso do cartão de um pedido do Cline. */
+export const CLINE_PERMISSION_NOTE = 'Vale a primeira resposta: aqui ou no app do Cline. Depois que um responde, o pedido some do outro.';
+
 /** O que o cartão oferece para um pedido (muda com a ferramenta). */
 export interface PermissionOptions {
   /** "Aprovar e não perguntar de novo" (as sugestões do Claude Code). */
@@ -61,6 +64,7 @@ export interface PermissionOptions {
 
 export function permissionOptions(p: Pick<PermissionRequestInfo, 'provider' | 'suggestions'>, agent: Pick<AgentInfo, 'kind' | 'background'>): PermissionOptions {
   if (p.provider === 'codex') return { always: false, interrupt: false, reasonRequired: true, seconds: true, note: CODEX_PERMISSION_NOTE };
+  if (p.provider === 'cline') return { always: false, interrupt: false, reasonRequired: false, seconds: false, note: CLINE_PERMISSION_NOTE };
   // Subagente em segundo plano: o Claude Code só mostra o diálogo depois que o hook responde.
   const blocking = agent.kind === 'sub' && !!agent.background;
   return {
@@ -339,10 +343,14 @@ export class PermissionCard {
     setText(this.title, ask ? (p.questions!.length > 1 ? 'Perguntas para você' : 'Pergunta para você') : 'Pede permissão');
     const by = p.subagent ? ` · subagente ${p.subagent}` : '';
     setText(this.what, ask ? `Aqui ou no terminal: vale a primeira resposta${by}` :`${p.icon} ${p.text}${by}`);
-    setText(this.timer, expiryText(p.expiresAt, now, opts.seconds));
+    // Cline: o pedido não vence (fica no hub até alguém responder), então não há contagem regressiva.
+    const cline = p.provider === 'cline';
+    setText(this.timer, cline ? 'aqui ou no app do Cline' : expiryText(p.expiresAt, now, opts.seconds));
     setTitle(
       this.timer,
-      codex
+      cline
+        ? `Pedido feito às ${formatClock(p.createdAt)}. O Cline espera a resposta: a primeira vale, daqui ou do app dele.`
+        : codex
         ? `Pedido feito às ${formatClock(p.createdAt)}. Sem resposta aqui até ${formatClock(p.expiresAt)}, o Codex segue sem a decisão do escritório e pede a aprovação no terminal.`
         : `Pedido feito às ${formatClock(p.createdAt)}. Sem resposta aqui até ${formatClock(p.expiresAt)}, o Habblaud devolve o pedido ao terminal.`,
     );
@@ -383,7 +391,7 @@ export class PermissionCard {
     setTitle(this.denyBtn, ask ? 'Não responder: o agente segue sem a resposta (com o motivo, se você escrever um)' : codex ? 'Recusar com um motivo (o Codex pede um)' : '');
     setTitle(
       this.terminalBtn,
-      codex ? 'O Habblaud solta o pedido agora: o Codex mostra a aprovação no terminal' : 'O Habblaud deixa este pedido de lado: vale o que você responder no terminal',
+      cline ? 'O Habblaud solta o pedido: responda no app do Cline' : codex ? 'O Habblaud solta o pedido agora: o Codex mostra a aprovação no terminal' : 'O Habblaud deixa este pedido de lado: vale o que você responder no terminal',
     );
     this.suggestions.sync(opts.always ? (p.suggestions ?? []) : []);
     for (const b of this.suggestions.container.querySelectorAll('button')) b.disabled = busy;

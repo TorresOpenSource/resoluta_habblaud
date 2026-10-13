@@ -3,6 +3,7 @@
 import { SoundBoard } from '../audio/board';
 import type { SoundKind } from '../audio/scheduler';
 import type { UiComponent, UiContext } from './context';
+import { computeCounters } from './model';
 
 export class SoundControl implements UiComponent {
   readonly board = new SoundBoard();
@@ -17,10 +18,15 @@ export class SoundControl implements UiComponent {
     };
     addEventListener('pointerdown', unlock, { passive: true });
     addEventListener('keydown', unlock);
+    // a música pausa com a aba oculta e volta com ela visível
+    document.addEventListener('visibilitychange', () => this.board.refresh());
   }
 
   render(): void {
     this.sync();
+    // trabalho em execução: agente processando ou esperando um comando (o pedido que espera você não conta)
+    const c = computeCounters(this.ctx.store.liveSnapshot);
+    this.board.setWorking(c.working + c.shells > 0);
   }
 
   /** Aplica as preferências atuais (interruptor geral, volume, categorias). */

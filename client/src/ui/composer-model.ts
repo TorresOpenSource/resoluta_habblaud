@@ -7,6 +7,9 @@ import type { AgentInfo, OutboxStatus, Provider } from '../../../shared/types';
 
 /** Dica para quem tem o recurso ligado, mas a sessão do agente não está com o plugin conectado. */
 export const PLUGIN_HINT = 'Para mandar mensagens daqui: npm run mod:install (plugin habblaud-mensagens)';
+/** Dica para um agente do Cline sem entregador (o Habblaud entrega pelo hub local do Cline, só fora do Docker). */
+export const CLINE_HINT = 'Para mandar mensagens ao Cline: rode o Habblaud fora do Docker (npm start) com o Cline aberto';
+
 /** A mesma dica para um agente do Codex sem entregador (no modo Node o próprio servidor entrega). */
 export const CODEX_BRIDGE_HINT = 'Para mandar mensagens ao Codex: com o Habblaud no Docker, deixe npm run codex:bridge rodando; no modo Node funciona sozinho';
 
@@ -31,14 +34,16 @@ export function composerMode(agent: AgentInfo | undefined, env: ComposerEnv): Co
   if (agent?.kind === 'sub') return { kind: 'off', text: 'Subagentes não recebem mensagens: escreva para o agente principal' };
   if (!agent || agent.status === 'offline' || agent.status === 'done') return { kind: 'off', text: 'Sessão encerrada' };
   const codex = agent.provider === 'codex';
-  if (!env.enabled) return { kind: 'off', text: codex ? 'Para responder, use o Codex' : 'Para responder, use o terminal do Claude Code' };
+  if (agent.provider === 'antigravity') return { kind: 'off', text: 'O Antigravity só aparece com presença e status: não recebe mensagens' };
+  if (!env.enabled) return { kind: 'off', text: codex ? 'Para responder, use o Codex' : agent.provider === 'cline' ? 'Para responder, use o Cline' : 'Para responder, use o terminal do Claude Code' };
   if (!env.local) return { kind: 'off', text: 'Para mandar mensagens por aqui, abra o Habblaud por http://localhost (ou 127.0.0.1)' };
-  if (!agent.canMessage) return { kind: 'hint', text: codex ? CODEX_BRIDGE_HINT : PLUGIN_HINT };
+  if (!agent.canMessage) return { kind: 'hint', text: codex ? CODEX_BRIDGE_HINT : agent.provider === 'cline' ? CLINE_HINT : PLUGIN_HINT };
   return { kind: 'ready' };
 }
 
 /** Dica embaixo da caixa (gaveta): como a mensagem entra na sessão. */
 export function composerTip(provider: Provider = 'claude'): string {
+  if (provider === 'cline') return 'Entra na sessão do Cline: com ele ocioso, começa um turno; ocupado, espera o turno acabar. Enter manda; Shift+Enter quebra a linha.';
   return provider === 'codex'
     ? 'Entra na fila da sessão e vira o próximo prompt quando o Codex terminar o que está fazendo. Enter manda; Shift+Enter quebra a linha.'
     : 'Entra na sessão como se você tivesse digitado. Enter manda; Shift+Enter quebra a linha.';
@@ -89,13 +94,14 @@ export function sendStatusText(s: SendState | undefined, now: number, provider: 
     case 'sending':
       return 'Enviando…';
     case 'queued':
-      return codex ? 'Na fila: entregando ao Codex…' : 'Na fila: esperando a sessão buscar a mensagem…';
+      return provider === 'cline' ? 'Na fila: entregando ao Cline…' : codex ? 'Na fila: entregando ao Codex…' : 'Na fila: esperando a sessão buscar a mensagem…';
     case 'sent':
       return 'Entregando à sessão…';
     case 'delivered':
       // Entregue = entrou na sessão ou na fila dela (com o agente ocupado, só entra quando ele terminar o turno). No
       // Codex é sempre a fila: o dono da sessão a consulta a cada ~10 s e só a usa com a sessão ociosa.
       if (now - s.at >= DELIVERED_SHOW_MS) return '';
+      if (provider === 'cline') return 'Entregue ✓ ao Cline (se ele estiver ocupado, entra quando terminar)';
       return codex
         ? 'Entregue ✓ na fila da sessão: entra quando o Codex terminar o que está fazendo (até ~10 s)'
         : 'Entregue ✓ (se o agente estiver ocupado, entra quando ele terminar)';
@@ -119,9 +125,10 @@ export function pollDelay(elapsed: number): number {
 export const LOST_ERROR = 'o Habblaud não conhece mais esta mensagem (ele reiniciou?)';
 export const TIMEOUT_ERROR = 'sem notícia da entrega: confira no terminal do Claude Code';
 export const CODEX_TIMEOUT_ERROR = 'sem notícia da entrega: confira no Codex';
+export const CLINE_TIMEOUT_ERROR = 'sem notícia da entrega: confira no Cline';
 export const OFFLINE_ERROR = 'não foi possível falar com o Habblaud';
 
 /** Prazo da consulta acabou sem notícia: onde conferir. */
 export function timeoutError(provider: Provider = 'claude'): string {
-  return provider === 'codex' ? CODEX_TIMEOUT_ERROR : TIMEOUT_ERROR;
+  return provider === 'cline' ? CLINE_TIMEOUT_ERROR : provider === 'codex' ? CODEX_TIMEOUT_ERROR : TIMEOUT_ERROR;
 }

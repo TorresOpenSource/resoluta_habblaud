@@ -1,14 +1,16 @@
 // Grupo "Sons" das configurações: interruptor geral, volume mestre e categorias.
 import { SOUND_CATEGORIES, type SoundCategory, type SoundKind } from '../audio/scheduler';
+import { parseYouTube } from '../audio/youtube';
 import type { UiContext } from './context';
 import { h, setAttr, setText } from './dom';
 import type { SoundControl } from './sound';
 
-const CATEGORY_UI: Readonly<Record<SoundCategory, { label: string; hint: string; sample: SoundKind }>> = {
+const CATEGORY_UI: Readonly<Record<SoundCategory, { label: string; hint: string; sample: SoundKind | null }>> = {
   alerts: { label: 'Avisos', hint: 'Sino quando alguém precisa de você; estalo quando uma tarefa termina.', sample: 'chime' },
   keys: { label: 'Teclado', hint: 'Digitação baixinha de quem trabalha nas salas à vista.', sample: 'keys' },
   elevator: { label: 'Elevador', hint: '"Ding" quando alguém chega ou vai embora.', sample: 'elevator' },
   social: { label: 'Rodas', hint: 'Pingue-pongue e fliperama no lounge.', sample: 'pingpong' },
+  music: { label: 'Música', hint: 'Música calma de fundo enquanto houver trabalho em execução.', sample: null },
 };
 
 export class SoundSettingsGroup {
@@ -17,6 +19,8 @@ export class SoundSettingsGroup {
   private volume: HTMLInputElement;
   private volumeOut: HTMLElement;
   private chips = new Map<SoundCategory, HTMLButtonElement>();
+  private musicUrl: HTMLInputElement;
+  private musicHint: HTMLElement;
   private details: HTMLElement;
 
   constructor(
@@ -47,17 +51,24 @@ export class SoundSettingsGroup {
       b.addEventListener('click', () => {
         const on = !ctx.prefs.sounds[cat];
         ctx.updatePrefs({ sounds: { ...ctx.prefs.sounds, [cat]: on } });
-        if (on) this.sound.preview(ui.sample);
+        if (on && ui.sample) this.sound.preview(ui.sample);
       });
       this.chips.set(cat, b);
       chipRow.append(b);
     }
 
+    this.musicUrl = h('input', { class: 'ui-snd__url', type: 'url', attrs: { placeholder: 'Link do YouTube (vídeo ou playlist)', 'aria-label': 'Link do YouTube para a música', spellcheck: 'false' } });
+    this.musicHint = h('span', { class: 'ui-set__hint' });
+    this.musicUrl.addEventListener('change', () => {
+      ctx.updatePrefs({ sounds: { ...ctx.prefs.sounds, musicUrl: this.musicUrl.value.trim().slice(0, 300) } });
+    });
+
     this.details = h(
       'div',
       { class: 'ui-snd__details' },
       h('div', { class: 'ui-set ui-snd__vol' }, h('span', { class: 'ui-set__label', text: 'Volume' }), this.volume, this.volumeOut),
-      h('div', { class: 'ui-set ui-set--stack' }, h('span', { class: 'ui-set__label', text: 'Tocar' }), chipRow, h('span', { class: 'ui-set__hint', text: 'Avisos: sino e estalo · Teclado: quem digita nas salas à vista · Elevador: chegadas e saídas · Rodas: pingue-pongue e fliperama.' })),
+      h('div', { class: 'ui-set ui-set--stack' }, h('span', { class: 'ui-set__label', text: 'Tocar' }), chipRow, h('span', { class: 'ui-set__hint', text: 'Avisos: sino e estalo · Teclado: quem digita nas salas à vista · Elevador: chegadas e saídas · Rodas: pingue-pongue e fliperama · Música: toca enquanto algum agente trabalha.' })),
+      h('div', { class: 'ui-set ui-set--stack' }, h('span', { class: 'ui-set__label', text: 'Música do YouTube' }), this.musicUrl, this.musicHint),
     );
 
     this.el = h(
@@ -91,5 +102,9 @@ export class SoundSettingsGroup {
       b.disabled = !p.sound;
     }
     this.details.classList.toggle('is-off', !p.sound);
+    if (document.activeElement !== this.musicUrl && this.musicUrl.value !== p.sounds.musicUrl) this.musicUrl.value = p.sounds.musicUrl;
+    this.musicUrl.disabled = !p.sound || !p.sounds.music;
+    const url = p.sounds.musicUrl;
+    setText(this.musicHint, !url ? 'Vazio: toca a música sintetizada do Habblaud.' : parseYouTube(url) ? 'Toca em loop enquanto houver trabalho em execução.' : 'Link do YouTube não reconhecido: toca a música sintetizada.');
   }
 }

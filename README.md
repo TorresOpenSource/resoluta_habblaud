@@ -351,7 +351,42 @@ dia/noite** dá para escolher automático, sempre dia ou sempre noite; para test
 Os **sons** vêm desligados. Ligados em **Configurações › Sons**, são sintetizados no próprio navegador (sem arquivos
 de áudio) e baixinhos: o teclado de quem trabalha nas salas à vista, o "ding" do elevador quando alguém chega ou vai
 embora, o sino quando alguém precisa de você, o estalo de tarefa concluída e o pingue-pongue e o fliperama das rodas.
-Há volume geral e cada categoria liga e desliga à parte. Com a aba oculta, só o sino toca.
+Há volume geral e cada categoria liga e desliga à parte. A categoria **Música** (desligada por padrão) toca uma música
+calma de fundo, também sintetizada, enquanto algum agente estiver trabalhando ou esperando um comando terminar; ela some
+alguns segundos depois do último trabalho. Cole um link de vídeo ou playlist do YouTube no campo **Música do YouTube**
+para tocar ele (em loop) no lugar da sintetizada; precisa de internet. Com a aba oculta, só o sino toca.
+
+### Cline e Antigravity
+
+O **Cline** (CLI, extensão ou app) e o **Antigravity** (o IDE de agentes do Google) também entram no escritório, só com
+**presença e status**: cada sessão vira um personagem na sala do projeto, **trabalhando** ou **ocioso**, e a música de
+fundo toca quando algum deles trabalha. Não há atividade detalhada nem histórico para eles, e só o Cline tem terminal. O
+Habblaud só lê metadados dos bancos SQLite locais (somente leitura): `~/.cline/data/db/sessions.db` (sessão aberta =
+sem fim registrado e com o processo vivo; trabalhando = mensagens gravadas nos últimos 20 s) e
+`~/.gemini/antigravity/conversation_summaries.db` (conversa rodando, ou mexida nos últimos 30 min = aberta). Nunca lê o
+conteúdo das conversas. Precisa do Node 22.13 ou mais novo (`node:sqlite`) e funciona fora do Docker; no Docker essas
+pastas não são montadas. `HABBLAUD_CLINE=0` e `HABBLAUD_ANTIGRAVITY=0` desligam.
+
+**Terminal do Cline.** **Abrir terminal** (tecla `T`) mostra a conversa da sessão do Cline: prompts, respostas, raciocínio,
+ferramentas e resultados, lidos de `~/.cline/data/sessions/<sessão>/<sessão>.messages.json`. O Cline regrava esse arquivo a
+cada mensagem, então o terminal avança por mensagem (não palavra por palavra), e uma resposta aparece quando o Cline a
+conclui. Segredos saem mascarados, como no terminal do Claude Code. Mesma trava de acesso local.
+
+**Aprovar pelo escritório os pedidos do Cline.** Quando o Cline pede aprovação para usar uma ferramenta (comando, edição,
+leitura...), o personagem fica **esperando você** e aparece o cartão **Pede permissão**, com os argumentos mascarados:
+**Aprovar** ou **Recusar** (com motivo, opcional). O hub do Cline aceita a primeira resposta (a daqui ou a do app dele) e o
+pedido some do outro. Não há "sempre permitir" nem "interromper", e o pedido não vence (fica no Cline até alguém
+responder). O Habblaud só mantém a conexão com o hub **enquanto há uma página local aberta**; com todas fechadas ele
+desconecta e o Cline volta a pedir só no app dele. Só aparece o que o Cline realmente pergunta: ferramentas que o modo dele
+aprova sozinho não geram cartão. Mesma trava do terminal (acesso local, fora do Docker).
+
+**Mandar mensagem ao Cline.** A caixa **Mandar mensagem** funciona para o Cline, pelo servidor local dele (o "hub",
+`ws://127.0.0.1:<porta>/hub`): o Habblaud entra como mais um cliente e manda o texto à sessão com `session.send_input`.
+Com o Cline ocioso a mensagem abre um turno novo; com ele ocupado, espera o turno terminar. Para conectar, o Habblaud
+lê o endereço e o token de `~/.cline/data/locks/hub/production.json` **só no momento de enviar** (nada fica guardado),
+só fala com um hub em loopback, e o token nunca vai para log, erro, resposta da página nem navegador. Vale o mesmo
+acesso local do terminal e das mensagens ao Claude Code (`HABBLAUD_MENSAGENS=0` desliga), só fora do Docker, e o Cline
+precisa estar aberto. O Antigravity não recebe mensagens.
 
 ### Terminal
 
@@ -610,6 +645,10 @@ Tudo funciona sem configurar nada. Se precisar ajustar, use variáveis de ambien
 | `HABBLAUD_TERMINAL` | ligado (só com acesso local) | `0` desliga o terminal, responder e mandar mensagens pelo escritório e o editor de personagem. Com a porta exposta eles já ficam desligados, sem opção de ligar. |
 | `HABBLAUD_MENSAGENS` | ligado (com o terminal) | `0` desliga só as mensagens pelo escritório (a caixa no terminal e nos detalhes do agente). |
 | `HABBLAUD_CODEX` | ligado | `0` desliga o Codex no escritório. |
+| `HABBLAUD_AUTO_MENSAGENS` | ligado | `0` impede que o `docker:up` e o `mod:ensure` (antes de `npm start` e `npm run dev`) instalem o plugin de mensagens onde só o mod está. |
+| `HABBLAUD_CLINE` | ligado | `0` desliga o Cline no escritório. |
+| `HABBLAUD_ANTIGRAVITY` | ligado | `0` desliga o Antigravity no escritório. |
+| `CLINE_DIR` / `ANTIGRAVITY_DIR` | `~/.cline` / `~/.gemini/antigravity` | Pastas de dados do Cline e do Antigravity. |
 | `HABBLAUD_CODEX_DIRS` | detecção automática | Pastas do Codex, separadas por vírgula (no lugar de `~/.codex*` e `CODEX_HOME`). |
 | `HABBLAUD_CODEX_BIN` | `codex` do PATH (no Windows, `codex.exe`) | O binário do Codex que entrega as mensagens (`codex queue`), no modo Node ou no `npm run codex:bridge`. |
 | `HABBLAUD_UPDATE_CHECK` | ligado | `0` desliga a verificação de versão nova (uma consulta às releases do repositório no GitHub a cada 6 h). |

@@ -314,3 +314,77 @@ describe('MessageRegistry: demo', () => {
     expect(registry.get(id)).toMatchObject({ status: 'failed', error: ERR_GONE });
   });
 });
+
+describe('MessageRegistry: Cline (pelo hub local)', () => {
+  function setupCline(run: (job: { sessionId: string; cwd?: string; text: string }) => Promise<{ ok: true } | { ok: false; error: string }>) {
+    let now = 1_000_000;
+    const clock = { now: () => now, advance: (ms: number) => (now += ms) };
+    let registry: MessageRegistry | undefined;
+    const office = new Office({
+      names: new NameStore(null),
+      version: 't',
+      startedAt: 0,
+      accounts: () => [],
+      sources: () => [],
+      accountName: () => undefined,
+      messages: () => registry?.reachable() ?? new Set(),
+      now: clock.now,
+    });
+    office.addMain({ id: '.cline:c1', provider: 'cline', account: '.cline', sessionId: 'cline-sess', cwd: '/p/app', role: 'Agente principal (Cline)', startedAt: 0, status: 'idle' });
+    office.addMain({ id: '.antigravity:a1', provider: 'antigravity', account: '.antigravity', sessionId: 'agy', cwd: '/p/app', role: 'Agente principal (Antigravity)', startedAt: 0, status: 'idle' });
+    registry = new MessageRegistry({ office, now: clock.now, cline: { run } });
+    return { office, registry, clock };
+  }
+
+  it('o agente do Cline recebe (canMessage) e a mensagem vai ao hub com a sessão, a pasta e o texto como digitado', async () => {
+    const jobs: Array<{ sessionId: string; cwd?: string; text: string }> = [];
+    const t = setupCline(async (job) => {
+      jobs.push(job);
+      return { ok: true };
+    });
+    expect(snapAgent(t.office, '.cline:c1')?.canMessage).toBe(true);
+    const typed = '  faça X\n';
+    const id = sent(t.registry.send({ agentId: '.cline:c1', text: typed }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(jobs).toEqual([{ sessionId: 'cline-sess', cwd: '/p/app', text: typed }]);
+    expect(t.registry.get(id)).toMatchObject({ status: 'delivered' });
+    // o texto não fica guardado nem sai pela caixa de entrada do plugin
+    expect(t.registry.inbox({ session: 'cline-sess' })).toEqual([]);
+  });
+
+  it('o hub recusou: a mensagem falha com o motivo; uma por vez por agente, na ordem', async () => {
+    const resolvers: Array<(r: { ok: true } | { ok: false; error: string }) => void> = [];
+    const texts: string[] = [];
+    const t = setupCline((job) => {
+      texts.push(job.text);
+      return new Promise((res) => resolvers.push(res));
+    });
+    const a = sent(t.registry.send({ agentId: '.cline:c1', text: 'primeira' }));
+    const b = sent(t.registry.send({ agentId: '.cline:c1', text: 'segunda' }));
+    expect(texts).toEqual(['primeira']);
+    expect(t.registry.get(a)?.status).toBe('sent');
+    expect(t.registry.get(b)?.status).toBe('queued');
+    resolvers[0]({ ok: false, error: 'Unknown session: cline-sess' });
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(t.registry.get(a)).toMatchObject({ status: 'failed', error: 'Unknown session: cline-sess' });
+    expect(texts).toEqual(['primeira', 'segunda']);
+    // sem confirmação por prazo: o entregador tem o prazo dele (a mensagem em andamento não falha sozinha)
+    t.clock.advance(SENT_TIMEOUT_MS * 3);
+    t.registry.tick?.();
+    expect(t.registry.get(b)?.status).toBe('sent');
+  });
+
+  it('o Antigravity não recebe mensagens, com o motivo', () => {
+    const t = setupCline(async () => ({ ok: true }));
+    expect(snapAgent(t.office, '.antigravity:a1')?.canMessage).toBeFalsy();
+    expect(t.registry.send({ agentId: '.antigravity:a1', text: 'oi' })).toMatchObject({ error: 'unavailable', reason: expect.stringContaining('presença e status') });
+  });
+
+  it('sem entregador (Docker): o Cline não recebe', () => {
+    const t = setupCline(async () => ({ ok: true }));
+    const bare = new MessageRegistry({ office: t.office, now: t.clock.now });
+    expect(bare.send({ agentId: '.cline:c1', text: 'oi' })).toMatchObject({ error: 'unavailable' });
+  });
+});
